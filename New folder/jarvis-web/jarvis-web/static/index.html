@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>J.A.R.V.I.S // MARK 2090</title>
+<style>
+*{margin:0;box-sizing:border-box}
+body{background:#02070d;overflow:hidden;color:#3ee6ff;font:13px/1.45 ui-monospace,Menlo,Consolas,monospace}
+#v,#cv{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}
+#v{object-fit:cover;transform:scaleX(-1);opacity:.4;filter:saturate(.3) hue-rotate(150deg) brightness(.8)}
+#log{position:fixed;right:28px;top:96px;bottom:110px;width:min(380px,42vw);overflow:auto;scrollbar-width:none;z-index:2}
+#log div{margin-bottom:6px}#log .y{color:#fff}#log a{color:#ffaa28}
+#btns{position:fixed;left:28px;top:270px;display:grid;gap:8px;width:170px;z-index:2}
+.b{background:#3ee6ff14;border:1px solid #3ee6ff88;color:inherit;padding:8px 12px;font:inherit;letter-spacing:.2em;cursor:pointer;clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.b:hover,.hov{background:#3ee6ff55;box-shadow:0 0 18px #3ee6ff}
+#boot{position:fixed;inset:0;display:grid;place-content:center;gap:18px;text-align:center;background:#02070d;z-index:9}
+#boot h1{font-weight:300;letter-spacing:.5em;font-size:28px}#err{color:#ff6b6b}
+</style></head><body>
+<video id="v" playsinline muted></video><canvas id="cv"></canvas><div id="log"></div>
+<div id="btns"><button class="b" data-q="what time is it">TIME</button><button class="b" data-q="what is the date">DATE</button><button class="b" data-q="tell me a joke">JOKE</button><button class="b" data-q="system status">STATUS</button><button class="b" data-q="help">HELP</button></div>
+<div id="boot"><h1>J.A.R.V.I.S</h1><p>MARK 2090 // voice + gesture interface</p><button class="b" id="go">INITIALISE</button><p id="err"></p></div>
+<script type="module">
+import{HandLandmarker,FilesetResolver}from"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/+esm";
+const $=s=>document.querySelector(s),cv=$('#cv'),g=cv.getContext('2d'),vid=$('#v'),logEl=$('#log');
+const S={gest:'NONE',hold:0,awake:0,speaking:false,thinking:false,level:0,scale:1,hands:0,fps:0,ping:0,bat:'--',mic:true};
+const COL={STANDBY:'#3ee6ff',LISTENING:'#7dff9a',THINKING:'#ffaa28',SPEAKING:'#ff6ee6'};
+const LEG=['PALM hold    mic on/off','POINT        move reticle','PINCH        click','PEACE + move scroll log','THUMBS UP    listen','2 HANDS      scale core'];
+let W,H,res={landmarks:[]},rx=0,ry=0,reticle=false,an,abuf,hl,rec;
+const mode=()=>S.speaking?'SPEAKING':S.thinking?'THINKING':performance.now()<S.awake?'LISTENING':'STANDBY';
+const resize=()=>{W=cv.width=innerWidth;H=cv.height=innerHeight};addEventListener('resize',resize);resize();
+const map=l=>{const vw=vid.videoWidth||1280,vh=vid.videoHeight||720,s=Math.max(W/vw,H/vh);return[(1-l.x)*vw*s-(vw*s-W)/2,l.y*vh*s-(vh*s-H)/2]};
+const micLevel=()=>{if(!an||!S.mic)return 0;an.getByteTimeDomainData(abuf);let s=0;for(const b of abuf)s+=(b-128)**2;return Math.min(1,Math.sqrt(s/abuf.length)/40)};
+
+function log(who,t,url){const d=document.createElement('div');d.className=who=='YOU'?'y':'';d.textContent=(who=='YOU'?'YOU> ':'JARVIS> ')+t+' ';
+ if(url){const a=document.createElement('a');a.href=url;a.target='_blank';a.textContent='[open]';d.append(a)}logEl.append(d);logEl.scrollTop=1e9}
+function say(t){S.speaking=true;const u=new SpeechSynthesisUtterance(t),v=speechSynthesis.getVoices();u.rate=.97;u.pitch=.8;
+ u.voice=v.find(x=>/Daniel|UK English Male|en-GB/i.test(x.name+x.lang))||v.find(x=>x.lang.startsWith('en'))||null;
+ u.onend=u.onerror=()=>{S.speaking=false;S.awake=performance.now()+6000};speechSynthesis.speak(u)}
+async function ask(q){log('YOU',q);S.thinking=true;let r;
+ try{r=await(await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:q,tz:Intl.DateTimeFormat().resolvedOptions().timeZone})})).json()}
+ catch{r={reply:'I have lost contact with the core server.'}}
+ S.thinking=false;log('JARVIS',r.reply,r.open);say(r.reply);if(r.open)window.open(r.open,'_blank');if(r.sleep){S.mic=false;rec?.stop()}}
+function hear(raw){const t=raw.toLowerCase().replace(/[^a-z0-9' ]/g,' ').replace(/\s+/g,' ').trim();if(!t)return;
+ const m=t.match(/\b(jarvis|jarvas|jervis|travis)\b/),now=performance.now();
+ if(m){const c=t.slice(m.index+m[0].length).trim();if(c)ask(c);else{S.awake=now+8000;log('JARVIS','Yes, sir?');say('Yes, sir?')}}
+ else if(now<S.awake)ask(t)}
+function startRec(){const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+ if(!SR){log('JARVIS','Voice needs Chrome or Edge. Buttons and gestures still work.');return}
+ if(!rec){rec=new SR();rec.continuous=true;rec.lang='en-IN';
+  rec.onresult=e=>{if(!S.speaking)hear(e.results[e.results.length-1][0].transcript)};
+  rec.onend=()=>{if(S.mic)setTimeout(()=>{try{rec.start()}catch{}},250)}}
+ try{rec.start()}catch{}}
+function toggleMic(){S.mic=!S.mic;if(S.mic){startRec();say('Voice online.')}else{rec?.stop();say('Voice muted.')}}
+const listenOnce=()=>{S.awake=performance.now()+8000;say('Listening.')};
+
+const d=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function classify(l){const sz=d(l[0],l[9])||1e-6,t=d(l[4],l[17])>d(l[3],l[17]);
+ const[i,m,r,p]=[[8,6],[12,10],[16,14],[20,18]].map(([a,b])=>d(l[a],l[0])>d(l[b],l[0])*1.05);
+ if(d(l[4],l[8])/sz<.3)return'PINCH';if(t&&i&&m&&r&&p)return'PALM';if(!(t||i||m||r||p))return'FIST';
+ if(i&&!(m||r||p))return'POINT';if(i&&m&&!(r||p))return'PEACE';
+ if(t&&!(i||m||r||p)&&l[4].y<l[0].y-sz*.5)return'THUMBS_UP';return'NONE'}
+const hist=[];let cur='NONE',since=0,fired=false,pinch=false,prevY=null;
+function gesture(now){const L=res.landmarks;S.hands=L.length;reticle=false;
+ if(!L.length){hist.length=0;cur='NONE';S.gest='NONE';S.hold=0;pinch=false;prevY=null;S.scale+=(1-S.scale)*.05;return}
+ if(L.length==2){const[a,b]=L.map(l=>l[8]);S.scale+=(Math.max(.6,Math.min(1.8,d(a,b)*2.2))-S.scale)*.12}else S.scale+=(1-S.scale)*.05;
+ const l=L[0];hist.push(classify(l));if(hist.length>5)hist.shift();
+ if(hist.length==5){const gg=hist.slice().sort((a,b)=>hist.filter(x=>x==b).length-hist.filter(x=>x==a).length)[0];
+  if(hist.filter(x=>x==gg).length>=4&&gg!=cur){cur=gg;since=now;fired=false}}
+ S.gest=cur;S.hold=(now-since)/1000;
+ if(!fired&&cur=='THUMBS_UP'&&S.hold>.6){fired=true;listenOnce()}
+ if(!fired&&cur=='PALM'&&S.hold>1){fired=true;toggleMic()}
+ document.querySelectorAll('.hov').forEach(b=>b.classList.remove('hov'));
+ if(cur=='POINT'||cur=='PINCH'){reticle=true;const p=cur=='PINCH'?{x:(l[4].x+l[8].x)/2,y:(l[4].y+l[8].y)/2}:l[8],[x,y]=map(p);
+  rx+=(x-rx)*.35;ry+=(y-ry)*.35;const el=document.elementFromPoint(rx,ry)?.closest('.b');el?.classList.add('hov');
+  if(cur=='PINCH'&&!pinch){pinch=true;el?.click()}if(cur=='POINT')pinch=false}else pinch=false;
+ if(cur=='PEACE'){if(prevY!=null)logEl.scrollTop+=(l[9].y-prevY)*2500;prevY=l[9].y}else prevY=null}
+
+function draw(t){g.clearRect(0,0,W,H);const c=COL[mode()],cx=W/2,cy=H/2,R=Math.min(W,H)*.3*S.scale;
+ g.globalCompositeOperation='lighter';g.globalAlpha=Math.min(1,t/2.5);g.shadowBlur=14;g.shadowColor=c;
+ const arc=(r,a,sp,w,col)=>{g.strokeStyle=col||c;g.lineWidth=w;g.beginPath();g.arc(cx,cy,r,a,a+sp);g.stroke()};
+ for(const[rf,sp,span,n,w,col]of[[1,.5,50,4,2],[.9,-.9,25,8,1],[.78,1.4,120,3,3],[.62,-.35,300,1,1],[.45,2,40,6,2,'#ffaa28']])
+  for(let k=0;k<n;k++)arc(R*rf,t*sp+k*2*Math.PI/n,span*Math.PI/180,w,col);
+ g.lineWidth=1;g.strokeStyle='#3ee6ff77';
+ for(let k=0;k<72;k++){const a=k*Math.PI/36+t*.14,r0=R*1.06,r1=R*(k%6?1.09:1.13);g.beginPath();g.moveTo(cx+r0*Math.cos(a),cy+r0*Math.sin(a));g.lineTo(cx+r1*Math.cos(a),cy+r1*Math.sin(a));g.stroke()}
+ g.strokeStyle=c;g.lineWidth=2;g.beginPath();
+ for(let k=0;k<=180;k++){const a=k*Math.PI/90,r=R*.7+S.level*R*.16*Math.sin(a*9+t*8)*Math.sin(a*3-t*3);g[k?'lineTo':'moveTo'](cx+r*Math.cos(a),cy+r*Math.sin(a))}g.closePath();g.stroke();
+ const p=R*.16*(1+.08*Math.sin(t*4)+S.level*.3);g.fillStyle=c;g.beginPath();g.arc(cx,cy,p,0,7);g.fill();g.fillStyle='#fff';g.beginPath();g.arc(cx,cy,p*.55,0,7);g.fill();
+ const tips=[4,8,12,16,20];
+ for(const l of res.landmarks){const P=l.map(map);g.strokeStyle=c;g.lineWidth=2;
+  for(const{start:a,end:b}of HandLandmarker.HAND_CONNECTIONS){g.beginPath();g.moveTo(...P[a]);g.lineTo(...P[b]);g.stroke()}
+  P.forEach((q,i)=>{g.fillStyle=tips.includes(i)?'#fff':c;g.beginPath();g.arc(q[0],q[1],tips.includes(i)?7:3,0,7);g.fill()})}
+ if(reticle){g.strokeStyle='#fff';g.lineWidth=2;g.beginPath();g.arc(rx,ry,18,0,7);g.moveTo(rx-28,ry);g.lineTo(rx-10,ry);g.moveTo(rx+10,ry);g.lineTo(rx+28,ry);g.moveTo(rx,ry-28);g.lineTo(rx,ry-10);g.moveTo(rx,ry+10);g.lineTo(rx,ry+28);g.stroke()}
+ g.strokeStyle=c;g.lineWidth=2;
+ for(const[x,y,dx,dy]of[[28,28,1,1],[W-28,28,-1,1],[28,H-28,1,-1],[W-28,H-28,-1,-1]]){g.beginPath();g.moveTo(x+dx*60,y);g.lineTo(x,y);g.lineTo(x,y+dy*60);g.stroke()}
+ const T=(s,x,y,sz=13,col=c)=>{g.font=sz+'px ui-monospace,monospace';g.fillStyle=col;g.fillText(s,x,y)};
+ T('J.A.R.V.I.S  //  MARK 2090',100,56,22);T(new Date().toLocaleTimeString(),W-200,56,16);T(`[ ${mode()} ]`,cx-70,cy+R*1.28,20);
+ T('// TELEMETRY',40,120);[['FPS',S.fps|0],['LATENCY',S.ping+' ms'],['POWER',S.bat],['HANDS',S.hands]].forEach(([k,v],i)=>T(k.padEnd(9)+v,40,146+i*20));
+ T(`GESTURE: ${S.gest}`,cx-110,H-52,15);g.strokeStyle=c;g.strokeRect(cx-110,H-40,220,5);g.fillStyle=c;g.fillRect(cx-110,H-40,220*Math.min(S.hold,1),5);
+ LEG.forEach((s,i)=>T(s,40,H-30-(LEG.length-1-i)*17,11,'#3ee6ff99'));
+ g.fillStyle='#3ee6ff22';g.fillRect(0,(t*140)%H,W,2)}
+
+let last=0,lastT=-1;const t0=performance.now();
+function loop(now){requestAnimationFrame(loop);S.fps+=(1000/(now-last||16)-S.fps)*.1;last=now;
+ if(hl&&vid.readyState>=2&&vid.currentTime!==lastT){lastT=vid.currentTime;res=hl.detectForVideo(vid,now);gesture(now)}
+ S.level=S.speaking?.55*Math.abs(Math.sin(now/110)):micLevel();draw((now-t0)/1000)}
+
+$('#go').onclick=async()=>{
+ try{const st=await navigator.mediaDevices.getUserMedia({video:{width:1280,height:720,facingMode:'user'},audio:true});
+  vid.srcObject=st;await vid.play();const ac=new AudioContext();an=ac.createAnalyser();an.fftSize=256;abuf=new Uint8Array(256);ac.createMediaStreamSource(st).connect(an)}
+ catch(e){$('#err').textContent='Camera/mic blocked: '+e.message;return}
+ $('#boot').remove();requestAnimationFrame(loop);
+ document.querySelectorAll('.b[data-q]').forEach(b=>b.onclick=()=>ask(b.dataset.q));
+ setInterval(async()=>{const s=performance.now();try{await fetch('/api/ping');S.ping=Math.round(performance.now()-s)}catch{S.ping='--'}},5000);
+ navigator.getBattery?.().then(b=>S.bat=Math.round(b.level*100)+'%');
+ startRec();log('JARVIS','Good to see you, sir. Loading hand tracking...');say('Good to see you, sir. All systems online.');
+ try{const fs=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+  const o=dg=>({baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:dg},runningMode:'VIDEO',numHands:2});
+  try{hl=await HandLandmarker.createFromOptions(fs,o('GPU'))}catch{hl=await HandLandmarker.createFromOptions(fs,o('CPU'))}
+  log('JARVIS','Gesture tracking online.')}catch(e){log('JARVIS','Hand tracking failed to load: '+e.message)}};
+</script></body></html>
